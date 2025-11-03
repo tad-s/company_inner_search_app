@@ -12,6 +12,12 @@ from uuid import uuid4
 import sys
 import unicodedata
 from dotenv import load_dotenv
+# ★ 追加
+os.environ.setdefault(
+    "USER_AGENT",
+    "HTSol-StreamlitApp/1.0 (+https://example.com)"
+)
+
 import streamlit as st
 from docx import Document
 from langchain_community.document_loaders import WebBaseLoader
@@ -20,13 +26,20 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 import constants as ct
 
-
 ############################################################
 # 設定関連
 ############################################################
 # 「.env」ファイルで定義した環境変数の読み込み
 load_dotenv()
+# --- User-Agent を未設定時に自動セット ---
+os.environ.setdefault(
+    "USER_AGENT",
+    "HTSol-StreamlitApp/1.0 (+https://example.com)"
+)
 
+# --- ロガー設定 ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(ct.LOGGER_NAME)
 
 ############################################################
 # 関数定義
@@ -151,6 +164,22 @@ def initialize_session_state():
         st.session_state.chat_history = []
 
 
+# --- ローカルフォルダ内ファイル探索関数（utilsから移植） ---
+from langchain_community.document_loaders import TextLoader
+
+def recursive_file_check(target_folder_path, docs_all):
+    import os
+    for root, dirs, files in os.walk(target_folder_path):
+        for file in files:
+            if file.endswith(".txt"):
+                file_path = os.path.join(root, file)
+                try:
+                    loader = TextLoader(file_path, encoding="utf-8")
+                    docs = loader.load()
+                    docs_all.extend(docs)
+                except Exception as e:
+                    print(f"[WARN] Failed to load {file_path}: {e}")
+
 def load_data_sources():
     """
     RAGの参照先となるデータソースの読み込み
@@ -163,15 +192,30 @@ def load_data_sources():
     # ファイル読み込みの実行（渡した各リストにデータが格納される）
     recursive_file_check(ct.RAG_TOP_FOLDER_PATH, docs_all)
 
+    # --- Webドキュメント読込（USER_AGENTつき） ---
     web_docs_all = []
     # ファイルとは別に、指定のWebページ内のデータも読み込み
     # 読み込み対象のWebページ一覧に対して処理
     for web_url in ct.WEB_URL_LOAD_TARGETS:
-        # 指定のWebページを読み込み
-        loader = WebBaseLoader(web_url)
-        web_docs = loader.load()
-        # for文の外のリストに読み込んだデータソースを追加
-        web_docs_all.extend(web_docs)
+
+        try:
+            logger.info(f"Loading web data from: {web_url}")
+            # 指定のWebページを読み込み
+            loader = WebBaseLoader(
+                web_url,
+                header_template={"User-Agent": os.getenv("USER_AGENT")}
+            )
+
+            web_docs = loader.load()
+            # for文の外のリストに読み込んだデータソースを追加
+            web_docs_all.extend(web_docs)
+            logger.info(f"Successfully loaded: {web_url}")
+
+        except Exception as e:
+            # 取得失敗してもアプリは継続
+            logger.warning(f"Web load skipped for {web_url}: {e}")
+            continue
+
     # 通常読み込みのデータソースにWebページのデータを追加
     docs_all.extend(web_docs_all)
 
